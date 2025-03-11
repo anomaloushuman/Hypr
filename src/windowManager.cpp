@@ -1,6 +1,12 @@
 #include "windowManager.hpp"
 #include "./events/events.hpp"
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <map> // Include for mapping window IDs to PIDs
+#include <fstream>
+#include <mutex>
 
 xcb_visualtype_t* CWindowManager::setupColors(const int& desiredDepth) {
     auto depthIter = xcb_screen_allowed_depths_iterator(Screen);
@@ -25,7 +31,10 @@ void CWindowManager::setupDepth() {
 }
 
 void CWindowManager::createAndOpenAllPipes() {
-    system("mkdir -p /tmp/hypr");
+    int result = system("mkdir -p /tmp/hypr");
+    if (result != 0) {
+        // Handle the error appropriately
+    }
     system("cat \" \" > /tmp/hypr/hyprbarin");
     system("cat \" \" > /tmp/hypr/hyprbarout");
     system("cat \" \" > /tmp/hypr/hyprbarind");
@@ -2677,4 +2686,70 @@ void CWindowManager::processCursorDeltaOnWindowResizeTiled(CWindow* pWindow, con
     TOPCONTAINER->setSplitRatio(std::clamp(TOPCONTAINER->getSplitRatio() + allowedMovement.y, (double)0.05f, (double)1.95f));
     SIDECONTAINER->recalcSizePosRecursive();
     TOPCONTAINER->recalcSizePosRecursive();
+}
+
+std::vector<int64_t> dirtyWindows; // Add this to track suspect windows
+
+void CWindowManager::cleanupTerminatedWindows() {
+    std::lock_guard<std::mutex> lock(pidMapMutex); // Lock the mutex
+    for (auto it = dirtyWindows.begin(); it != dirtyWindows.end(); ) {
+        if (isProcessTerminated(*it)) {
+            // Remove the window
+            removeWindow(*it);
+            it = dirtyWindows.erase(it); // Remove from the dirty list
+        } else {
+            ++it; // Move to the next window
+        }
+    }
+}
+
+bool CWindowManager::isProcessTerminated(int64_t windowID) {
+    pid_t pid = getProcessIDFromWindowID(windowID);
+    if (pid <= 0) return true; // If no valid PID is found, assume the process is gone
+
+    // Check if the process exists
+    if (kill(pid, 0) == -1) {
+        return true; // Process does not exist
+    }
+
+    // Verify the process command line
+    std::string expectedCmdline = "expected_command"; // Replace with actual expected command
+    if (!isExpectedProcess(pid, expectedCmdline)) {
+        return true; // Process is not the expected one
+    }
+
+    return false; // Process is still running
+}
+
+pid_t CWindowManager::getProcessIDFromWindowID(int64_t windowID) {
+    // Implement logic to retrieve the PID from the window ID
+    // This could involve querying the system's window manager or using platform-specific APIs
+    auto it = windowIDToPIDMap.find(windowID);
+    if (it != windowIDToPIDMap.end()) {
+        return it->second; // Return the associated PID
+    }
+    Debug::log(ERR, "No PID found for window ID: " + std::to_string(windowID));
+    return -1; // Return -1 if no PID is found for the given window ID
+}
+
+// Example function to add a window and its PID to the map
+void CWindowManager::addWindowWithPID(int64_t windowID, pid_t pid) {
+    std::lock_guard<std::mutex> lock(pidMapMutex); // Lock the mutex
+    windowIDToPIDMap[windowID] = pid; // Store the mapping
+}
+
+// Example function to remove a window from the map
+void CWindowManager::removeWindow(int64_t windowID) {
+    std::lock_guard<std::mutex> lock(pidMapMutex); // Lock the mutex
+    windowIDToPIDMap.erase(windowID); // Remove the mapping when the window is closed
+}
+
+bool CWindowManager::isExpectedProcess(pid_t pid, const std::string& expectedCmdline) {
+    std::ifstream cmdlineFile("/proc/" + std::to_string(pid) + "/cmdline");
+    std::string cmdline;
+    if (cmdlineFile) {
+        std::getline(cmdlineFile, cmdline);
+        return cmdline == expectedCmdline; // Compare with expected command line
+    }
+    return false; // Process does not exist
 }

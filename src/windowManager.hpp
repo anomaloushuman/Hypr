@@ -7,6 +7,11 @@
 #include <thread>
 #include <xcb/xcb.h>
 #include <deque>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <map>
+#include <mutex>
 
 #include "KeybindManager.hpp"
 #include "utilities/Workspace.hpp"
@@ -153,6 +158,18 @@ public:
     void                        changeSplitRatioCurrent(std::string dir);
 
     void                        processCursorDeltaOnWindowResizeTiled(CWindow*, const Vector2D&);
+
+    void                        cleanupTerminatedWindows();
+    bool                        isProcessTerminated(int64_t windowID);
+    pid_t getProcessIDFromWindowID(int64_t windowID);
+    void addWindowWithPID(int64_t windowID, pid_t pid);
+    void removeWindow(int64_t windowID);
+
+    std::map<int64_t, pid_t> windowIDToPIDMap;
+
+    std::mutex pidMapMutex;
+
+    bool isExpectedProcess(pid_t pid, const std::string& expectedCmdline);
 
 private:
 
